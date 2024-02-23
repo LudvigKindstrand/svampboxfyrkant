@@ -4,128 +4,141 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-#include <unistd.h>
-#include <fcntl.h>
+#include <unistd.h> 
 
 #define SERVER_PORT 8080
 #define BUFFER_SIZE 4096
 
-void send404(int client_sd);
-
-void send_file(int client_sd, const char *filename, char *content_type)
-{
-	FILE *file = fopen(filename, "rb");
-
-	if (file != NULL)
-	{
-		// Send HTTP response header
-		dprintf(client_sd, "HTTP/1.1 200 OK\r\nServer: Demo Web Server\r\nContent-Type: %s\r\n\r\n", content_type);
-
-		// Send the content of the file
-		char buffer[BUFFER_SIZE];
-		size_t bytes_read;
-		bytes_read = fread(buffer, 1, sizeof(buffer), file);
-		if (bytes_read)
-		{
-			while (bytes_read > 0)
-			{
-				write(client_sd, buffer, bytes_read);
-				bytes_read = fread(buffer, 1, sizeof(buffer), file);
-			}
-		}
-		else
-		{
-			send404(client_sd);
-		}
-	}
-	else
-	{
-		send404(client_sd);
-	}
-
-	// Close the file
-	fclose(file);
+// Funktion för att skicka felmeddelande 404 Not Found
+void error(int client_sd) {
+    const char *response_404 = "HTTP/1.1 404 Not Found\r\nServer: Demo Web Server\r\n\r\nFile not found";
+    write(client_sd, response_404, strlen(response_404)); // Skicka 404 HTTP-svar till klienten
 }
 
-void send404(int client_sd)
-{
-	// File not found (404)
-	const char *response_404 = "HTTP/1.1 404 Not Found\r\nServer: Demo Web Server\r\n\r\nFile not found";
-	write(client_sd, response_404, strlen(response_404));
+// Funktion för att skicka Content-Type i HTTP-header baserat på filtyp
+void SendContentType(const char *type, int socket) {
+    char response[BUFFER_SIZE];
+    if (strcmp(type, "jpg") == 0) {
+        snprintf(response, BUFFER_SIZE, "HTTP/1.1 200 OK\r\nServer: Demo Web Server\r\nContent-Type: image/jpeg\r\n\r\n");
+    } else if (strcmp(type, "html") == 0) {
+        snprintf(response, BUFFER_SIZE, "HTTP/1.1 200 OK\r\nServer: Demo Web Server\r\nContent-Type: text/html\r\n\r\n");
+    } else {
+        // Okänd filtyp, skicka 404 header
+        snprintf(response, BUFFER_SIZE, "HTTP/1.1 404 Not Found\r\nServer: Demo Web Server\r\n\r\n");
+    }
+
+    write(socket, response, strlen(response)); // Skicka HTTP-header till klienten
 }
 
-int main()
-{
-	struct sockaddr_in serveraddr;
-	struct sockaddr_in clientaddr;
-	int clientaddrlen;
-	int request_sd, sd, fd, s, on = 1;
-	int bytes;
-	char buf[BUFFER_SIZE];
-	char *ContentToken;
-	char *token;
-	int n;
+// Funktion för att behandla HTTP-förfrågning och skicka svar till klienten
+void process_http_request(int client_sd, const char *filename, const char *content_type) {
+    FILE *file = fopen(filename, "rb");
 
-	// Create socket
-	request_sd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (file != NULL) {
+        // Skicka HTTP-header med lämplig Content-Type
+        SendContentType(content_type, client_sd);
 
-	printf("Servers listening and socket is created. \n");
+        // Skicka innehållet i filen
+        char buffer[BUFFER_SIZE];
+        size_t bytes_read;
 
-	// Fills in the address structure
-	memset(&serveraddr, 0, sizeof(struct sockaddr_in));
-	serveraddr.sin_family = AF_INET;
-	serveraddr.sin_addr.s_addr = htonl(INADDR_ANY);
-	serveraddr.sin_port = htons(SERVER_PORT);
+        while ((bytes_read = fread(buffer, 1, sizeof(buffer), file)) > 0) {
+            write(client_sd, buffer, bytes_read); // Skicka filens innehåll till klienten
+        }
 
-	setsockopt(request_sd, SOL_SOCKET, SO_REUSEADDR, (char *)&on, sizeof(on));
+        // Stäng filen
+        fclose(file);
+    } else {
+        // Filen hittades inte (404)
+        error(client_sd);
+    }
+}
 
-	if (request_sd < 0)
-		perror("socket failed");
+int main() {
+    struct sockaddr_in server_addr, client_addr;
+    int server_socket, client_socket;
+    socklen_t client_addrlen = sizeof(client_addr);
 
-	// Bind address to socket
-	bind(request_sd, (struct sockaddr *)&serveraddr, sizeof(struct sockaddr_in));
-	printf("Servers address binded to the socket. \n");
+    // Skapa en socket för servern
+    server_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (server_socket < 0) {
+        perror("Socket creation failed");
+        exit(EXIT_FAILURE);
+    }
 
-	// Activate connect request queue
-	listen(request_sd, SOMAXCONN);
+    // Konfigurera serveradressen och porten
+    memset(&server_addr, 0, sizeof(struct sockaddr_in));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    server_addr.sin_port = htons(SERVER_PORT);
 
-	while (1)
-	{
-		// Receive connection
-		clientaddrlen = sizeof(struct sockaddr_in);
-		sd = accept(request_sd, (struct sockaddr *)&clientaddr, &clientaddrlen);
+    // Bind servern till den angivna porten
+    if (bind(server_socket, (struct sockaddr *)&server_addr, sizeof(struct sockaddr_in)) < 0) {
+        perror("Binding failed");
+        exit(EXIT_FAILURE);
+    }
 
-		// Read data from socket and write it
-		read(sd, buf, BUFFER_SIZE);
+    // Lyssna efter inkommande anslutningar
+    if (listen(server_socket, SOMAXCONN) < 0) {
+        perror("Listening failed");
+        exit(EXIT_FAILURE);
+    }
 
-		// Parse out path
-		token = strtok(buf, " ");
-		token = strtok(NULL, " ");
-		if (token)
-		{
-			// removes first "/" from path
-			memmove(token, token + 1, strlen(token));
+    while (1) {
+        // Acceptera inkommande anslutning från klient
+        client_socket = accept(server_socket, (struct sockaddr *)&client_addr, &client_addrlen);
+        if (client_socket < 0) {
+            perror("Accept failed");
+            continue;
+        }
 
-			char temp[BUFFER_SIZE];
-			strcpy(temp, token);
+        printf("Anslutning accepterad\n");
 
-			// Parse out the content type
+        // Läs inkommande data från klienten till en buffert
+        char buffer[BUFFER_SIZE];
+        ssize_t bytes_read = read(client_socket, buffer, BUFFER_SIZE);
+        if (bytes_read < 0) {
+            perror("Fel vid läsning från socket");
+            close(client_socket);
+            continue;
+        } else if (bytes_read == 0) {
+            // Ingen data läst, anslutningen är stängd
+            close(client_socket);
+            continue;
+        }
 
-			ContentToken = strtok(temp, ".");
-			ContentToken = strtok(NULL, " ");
-			if (ContentToken)
-			{
-				send_file(sd, token, ContentToken);
-			}
-			else
-			{
-				send404(sd);
-			}
-		}
-		close(sd);
-	}
+        // Noll-terminera bufferten för att behandla den som en sträng
+        buffer[bytes_read] = '\0';
 
-	// Close sockets
+        // Parsa sökvägen till filen från HTTP-förfrågan
+        char *token = strtok(buffer, " ");
+        token = strtok(NULL, " ");
+        if (token) {
+            // Ta bort första "/" från sökvägen
+            memmove(token, token + 1, strlen(token));
 
-	close(request_sd);
+            char temp[BUFFER_SIZE];
+            strcpy(temp, token);
+
+            // Parsa ut Content-Type
+            char *content_type = "text/html"; // Standard Content-Type
+            char *ContentToken = strtok(temp, ".");
+            ContentToken = strtok(NULL, " ");
+            if (ContentToken) {
+                process_http_request(client_socket, token, ContentToken); // Hantera HTTP-förfrågan och skicka svar till klienten
+            } else {
+                // Fel vid parsning av Content-Type, skicka 404
+                error(client_socket);
+            }
+        }
+
+        // Stäng klientens socket
+        close(client_socket);
+        printf("Anslutning stängd\n");
+    }
+
+    // Stäng serverns socket
+    close(server_socket);
+
+    return 0;
 }

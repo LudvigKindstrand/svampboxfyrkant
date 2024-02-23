@@ -7,9 +7,10 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <stdint.h>
 
-#define PORT 37
-#define BUFFER_SIZE 1000
+#define PORT 8037
+#define EPOCH_OFFSET 2208988800L
 
 int main() {
     // Create socket
@@ -33,28 +34,25 @@ int main() {
         exit(EXIT_FAILURE);
     }
 
-    // Listen for requests
-    printf("Server listening on port %d...\n", PORT);
-
-    // Serve clients
     while (1) {
-        char buffer[BUFFER_SIZE];
+        time_t current_time;
+        uint32_t net_time;
         struct sockaddr_in client_addr;
         socklen_t client_addrlen = sizeof(client_addr);
 
         // Receive request from client
-        ssize_t bytes_received = recvfrom(server_socket, buffer, BUFFER_SIZE, 0, (struct sockaddr *)&client_addr, &client_addrlen);
+        ssize_t bytes_received = recvfrom(server_socket, NULL, 0, 0, (struct sockaddr *)&client_addr, &client_addrlen);
         if (bytes_received < 0) {
             perror("Error receiving data");
             continue;
         }
 
         // Get current time
-        time_t current_time;
         time(&current_time);
+        net_time = htonl((uint32_t)(current_time + EPOCH_OFFSET));
 
-        // Send current time to client
-        sendto(server_socket, (const char *)&current_time, sizeof(current_time), 0, (const struct sockaddr *)&client_addr, client_addrlen);
+        // Send time to client
+        sendto(server_socket, (const char *)&net_time, sizeof(net_time), 0, (const struct sockaddr *)&client_addr, client_addrlen);
     }
 
     // Close socket
